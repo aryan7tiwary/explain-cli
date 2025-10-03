@@ -1,36 +1,36 @@
 #!/bin/bash
 
-# This script sets up the explain-cli tool for easy access.
+# This script installs explain-cli system-wide with a stable app dir and wrapper.
 
-# Ensure the script is run with root privileges for copying to /usr/local/bin
+# Ensure the script is run with root privileges
 if [ "$EUID" -ne 0 ]; then
     echo "Please run as root or with sudo: sudo ./setup.sh"
     exit 1
 fi
 
-SOURCE_DIR="$(dirname "$0")"
+SOURCE_DIR="$(cd "$(dirname "$0")" && pwd)"
 INSTALL_DIR="/usr/local/bin"
+APP_DIR="/opt/explain-cli"
 SCRIPT_NAME="explain-cli"
 
-# Copy the main script to the install directory
-cp "$SOURCE_DIR/cli.py" "$INSTALL_DIR/$SCRIPT_NAME"
+# Recreate application directory to avoid nested copies (e.g., src/src)
+rm -rf "$APP_DIR"
+mkdir -p "$APP_DIR"
 
-# Make the script executable
+# Copy application files fresh
+cp -f "$SOURCE_DIR/cli.py" "$APP_DIR/cli.py"
+cp -a "$SOURCE_DIR/src" "$APP_DIR/"
+
+# Create/overwrite wrapper script in /usr/local/bin
+cat > "$INSTALL_DIR/$SCRIPT_NAME" << 'EOF'
+#!/bin/bash
+PYTHONPATH="/opt/explain-cli" exec python3 "/opt/explain-cli/cli.py" "$@"
+EOF
+
+# Make the wrapper executable
 chmod +x "$INSTALL_DIR/$SCRIPT_NAME"
 
-# Create a symbolic link for the src directory if needed (for imports)
-# This assumes the src directory is relative to the cli.py script
-# A more robust solution might involve packaging or setting PYTHONPATH
-# For simplicity, we'll assume the user runs from the project root or handles PYTHONPATH
-
-# Optional: Create a wrapper script if direct execution of cli.py causes import issues
-# This is a more robust way to handle imports when the script is moved
-WRAPPER_SCRIPT_CONTENT="""#!/bin/bash
-PYTHONPATH=\"$SOURCE_DIR\" python3 \"$INSTALL_DIR/$SCRIPT_NAME\" \"$@\"\n"""
-
-# For now, we'll rely on the direct copy and hope imports work or user sets PYTHONPATH
-# If imports fail, the wrapper script approach would be better.
-
-echo "explain-cli has been installed to $INSTALL_DIR."
-echo "You can now run it from anywhere using: $SCRIPT_NAME \"your_command_here\""
-echo "To add custom commands: $SCRIPT_NAME --add-command <command> <description> <danger_level> <flags>"
+echo "explain-cli has been installed."
+echo "Wrapper: $INSTALL_DIR/$SCRIPT_NAME"
+echo "App dir: $APP_DIR"
+echo "Run from anywhere: $SCRIPT_NAME --help"
