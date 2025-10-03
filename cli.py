@@ -3,13 +3,13 @@ import argparse
 from src.parser import tokenize_command
 from src.knowledge_base import COMMAND_KNOWLEDGE_BASE
 from src.danger_detector import detect_dangerous_patterns
-from src.man_parser import get_command_help
+from src.man_parser import get_command_help, get_command_details
 from src.custom_commands import load_custom_commands, add_custom_command
+from src.regex_explainer import looks_like_regex, explain_regex
 
-def analyze_command(tokens, knowledge_base):
+def _analyze_single_command(tokens, knowledge_base):
     explanation = []
     warnings = []
-
     if not tokens:
         return explanation, warnings
 
@@ -22,27 +22,120 @@ def analyze_command(tokens, knowledge_base):
         if command_info['danger_level'] in ["high", "critical"]:
             warnings.append(f"The command '{command}' is considered {command_info['danger_level']} risk.")
 
-        # Explain flags
         flags = command_info.get("flags", {})
-        for arg in args:
-            if arg in flags:
-                explanation.append(f"  {arg}: {flags[arg]}")
-            elif arg.startswith("-"):
-                # Handle combined flags like -la
+        used_flags = []
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            if arg.startswith("--"):
+                name, eq, val = arg.partition('=')
+                if name in flags:
+                    if eq and val:
+                        explanation.append(f"  {name}: {flags[name]} (value: {val})")
+                    elif i + 1 < len(args) and not args[i+1].startswith('-'):
+                        explanation.append(f"  {name}: {flags[name]} (value: {args[i+1]})")
+                        i += 1
+                    else:
+                        explanation.append(f"  {name}: {flags[name]}")
+            elif arg.startswith("-") and len(arg) > 2:
                 for char in arg[1:]:
                     flag = f"-{char}"
                     if flag in flags:
                         explanation.append(f"  {flag}: {flags[flag]}")
-
+            elif arg in flags:
+                # Short flag possibly with a following value
+                if i + 1 < len(args) and not args[i+1].startswith('-'):
+                    explanation.append(f"  {arg}: {flags[arg]} (value: {args[i+1]})")
+                    i += 1
+                else:
+                    explanation.append(f"  {arg}: {flags[arg]}")
+            i += 1
     else:
-        explanation.append(get_command_help(command))
+        details = get_command_details(command)
+        if details.get("summary"):
+            explanation.append(details["summary"])
+        flags = details.get("flags", {})
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            if arg.startswith("--"):
+                name, eq, val = arg.partition('=')
+                if name in flags:
+                    if eq and val:
+                        explanation.append(f"  {name}: {flags[name]} (value: {val})")
+                    elif i + 1 < len(args) and not args[i+1].startswith('-'):
+                        explanation.append(f"  {name}: {flags[name]} (value: {args[i+1]})")
+                        i += 1
+                    else:
+                        explanation.append(f"  {name}: {flags[name]}")
+            elif arg.startswith("-") and len(arg) > 2:
+                for char in arg[1:]:
+                    flag = f"-{char}"
+                    if flag in flags:
+                        explanation.append(f"  {flag}: {flags[flag]}")
+            elif arg in flags:
+                if i + 1 < len(args) and not args[i+1].startswith('-'):
+                    explanation.append(f"  {arg}: {flags[arg]} (value: {args[i+1]})")
+                    i += 1
+                else:
+                    explanation.append(f"  {arg}: {flags[arg]}")
+            i += 1
 
-    # Separate remaining arguments
-    remaining_args = [arg for arg in args if not arg.startswith("-")]
-    if remaining_args:
-        explanation.append(f"Arguments: {', '.join(remaining_args)}")
+    # Remove values already consumed by flags
+    consumed = set()
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg.startswith('--'):
+            name, eq, val = arg.partition('=')
+            if eq and val:
+                pass
+            elif i + 1 < len(args) and not args[i+1].startswith('-'):
+                consumed.add(i+1)
+                i += 1
+        elif arg.startswith('-') and len(arg) == 2:
+            if i + 1 < len(args) and not args[i+1].startswith('-'):
+                consumed.add(i+1)
+                i += 1
+        i += 1
+    positional_args = [arg for idx, arg in enumerate(args) if idx not in consumed and not arg.startswith("-")]
+    if command == "grep" and positional_args:
+        explanation.append(f"  pattern: {positional_args[0]}")
+        if looks_like_regex(positional_args[0]):
+            explanation.append(f"  regex: {explain_regex(positional_args[0])}")
+        if len(positional_args) > 1:
+            explanation.append(f"  files: {', '.join(positional_args[1:])}")
+    elif positional_args:
+        explanation.append(f"Arguments: {', '.join(positional_args)}")
+        # Add regex explanations for any arg that looks like a regex
+        for arg in positional_args:
+            if looks_like_regex(arg):
+                explanation.append(f"  regex: {explain_regex(arg)}")
 
     return explanation, warnings
+
+
+def analyze_command(tokens, knowledge_base):
+    segments = []
+    current = []
+    for tok in tokens:
+        if tok == '|':
+            if current:
+                segments.append(current)
+                current = []
+        else:
+            current.append(tok)
+    if current:
+        segments.append(current)
+
+    all_explanations = []
+    all_warnings = []
+    for segment in segments:
+        exp, warns = _analyze_single_command(segment, knowledge_base)
+        all_explanations.extend(exp)
+        all_warnings.extend(warns)
+    # Removed global regex scan to avoid false positives on paths/IPs
+    return all_explanations, all_warnings
 
 def main():
     parser = argparse.ArgumentParser(description="Explains a shell command.")
