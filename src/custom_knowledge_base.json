@@ -1,0 +1,10 @@
+{
+    "my-script": {
+        "description": "This is my custom script",
+        "danger_level": "low",
+        "flags": {
+            "-v": "verbose",
+            "-d": "debug"
+        }
+    }
+}
