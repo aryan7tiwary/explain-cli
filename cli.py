@@ -6,6 +6,7 @@ from src.danger_detector import detect_dangerous_patterns
 from src.man_parser import get_command_help, get_command_details
 from src.custom_commands import load_custom_commands, add_custom_command
 from src.regex_explainer import looks_like_regex, explain_regex
+from src.signals import explain_signal_flag
 
 def _analyze_single_command(tokens, knowledge_base):
     explanation = []
@@ -98,6 +99,14 @@ def _analyze_single_command(tokens, knowledge_base):
     i = 0
     while i < len(args):
         arg = args[i]
+        # Generic signal flag explanations for kill-like commands
+        if command in ("kill", "killall"):
+            next_arg = args[i+1] if i + 1 < len(args) else None
+            sig_exp = explain_signal_flag(arg, next_arg)
+            if sig_exp:
+                explanation.append(sig_exp)
+                if arg == '-s' and next_arg and not next_arg.startswith('-'):
+                    consumed.add(i+1)
         if arg.startswith('--'):
             name, eq, val = arg.partition('=')
             if eq and val:
@@ -105,10 +114,8 @@ def _analyze_single_command(tokens, knowledge_base):
             elif i + 1 < len(args) and not args[i+1].startswith('-'):
                 consumed.add(i+1)
                 i += 1
-        elif arg.startswith('-') and len(arg) == 2:
-            if i + 1 < len(args) and not args[i+1].startswith('-'):
-                consumed.add(i+1)
-                i += 1
+        # Do not generically consume a value after single-dash short flags;
+        # Without per-command metadata this can misclassify positional args
         i += 1
     # Exclude redirection targets as positional args
     redir_target_indices = set()
