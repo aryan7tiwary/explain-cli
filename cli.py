@@ -81,6 +81,18 @@ def _analyze_single_command(tokens, knowledge_base):
                     explanation.append(f"  {arg}: {flags[arg]}")
             i += 1
 
+    # Detect I/O redirections in args and mark consumed indices
+    redirections = []  # list of tuples (op, target)
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        # Supported forms: '>', '>>', '1>', '2>', '1>>', '2>>'
+        if tok in ('>', '>>') or (len(tok) <= 3 and tok.endswith(('>', '>>')) and tok[:-1].isdigit()):
+            if i + 1 < len(args):
+                redirections.append((tok, args[i+1]))
+                i += 1
+        i += 1
+
     # Remove values already consumed by flags
     consumed = set()
     i = 0
@@ -98,19 +110,90 @@ def _analyze_single_command(tokens, knowledge_base):
                 consumed.add(i+1)
                 i += 1
         i += 1
-    positional_args = [arg for idx, arg in enumerate(args) if idx not in consumed and not arg.startswith("-")]
+    # Exclude redirection targets as positional args
+    redir_target_indices = set()
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok in ('>', '>>') or (len(tok) <= 3 and tok.endswith(('>', '>>')) and tok[:-1].isdigit()):
+            if i + 1 < len(args):
+                redir_target_indices.add(i+1)
+                i += 1
+        i += 1
+
+    positional_args = [arg for idx, arg in enumerate(args) if idx not in consumed and idx not in redir_target_indices and not arg.startswith("-")]
     if command == "grep" and positional_args:
         explanation.append(f"  pattern: {positional_args[0]}")
         if looks_like_regex(positional_args[0]):
             explanation.append(f"  regex: {explain_regex(positional_args[0])}")
         if len(positional_args) > 1:
             explanation.append(f"  files: {', '.join(positional_args[1:])}")
+    elif command == "chmod" and positional_args:
+        mode = positional_args[0]
+        target = ", ".join(positional_args[1:]) if len(positional_args) > 1 else None
+        # Octal mode like 755 or 0644
+        import re as _re
+        if _re.fullmatch(r"0?[0-7]{3}", mode):
+            digits = mode[-3:]
+            who = ["owner", "group", "others"]
+            bits = []
+            for label, d in zip(who, digits):
+                val = int(d)
+                perms = []
+                if val & 4:
+                    perms.append("read")
+                if val & 2:
+                    perms.append("write")
+                if val & 1:
+                    perms.append("execute")
+                perm_str = "none" if not perms else "/".join(perms)
+                bits.append(f"  {label}: {d} ({perm_str})")
+            explanation.append(f"  mode: {mode}")
+            explanation.extend(bits)
+            if target:
+                explanation.append(f"  target: {target}")
+        else:
+            # For symbolic modes like u+x,g-w
+            explanation.append(f"  mode: {mode}")
+            if target:
+                explanation.append(f"  target: {target}")
+    elif command == "chown" and positional_args:
+        owner_group = positional_args[0]
+        targets = positional_args[1:]
+        owner = None
+        group = None
+        if ":" in owner_group:
+            owner, group = owner_group.split(":", 1)
+            owner = owner if owner else None
+            group = group if group else None
+        else:
+            owner = owner_group
+        def _id_hint(val: str) -> str:
+            return " (numeric id)" if val.isdigit() else ""
+        if owner is not None:
+            explanation.append(f"  owner: {owner}{_id_hint(owner)}")
+        if group is not None:
+            explanation.append(f"  group: {group}{_id_hint(group)}")
+        if targets:
+            explanation.append(f"  target: {', '.join(targets)}")
+    elif command == "echo" and positional_args:
+        # Prefer more descriptive echo explanation and suppress generic Arguments line
+        explanation.append("- echo: prints a line of text to standard output")
+        explanation.append(f"- \"{positional_args[0]}\": the string being printed")
     elif positional_args:
         explanation.append(f"Arguments: {', '.join(positional_args)}")
-        # Add regex explanations for any arg that looks like a regex
-        for arg in positional_args:
-            if looks_like_regex(arg):
-                explanation.append(f"  regex: {explain_regex(arg)}")
+
+    # Add explanations for redirections and warnings for overwrite
+    for op, target in redirections:
+        if op in ('>', '1>'):
+            explanation.append(f"- {op} {target}: redirects the output into a file named {target} (overwrites file if it exists)")
+            warnings.append(f"This command overwrites {target}. Any existing content will be lost.")
+        elif op in ('>>', '1>>'):
+            explanation.append(f"- {op} {target}: appends standard output to {target}")
+        elif op.startswith('2') and op.endswith('>>'):
+            explanation.append(f"- {op} {target}: appends standard error to {target}")
+        elif op.startswith('2') and op.endswith('>'):
+            explanation.append(f"- {op} {target}: redirects standard error to {target} (overwrites)")
 
     return explanation, warnings
 
