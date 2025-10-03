@@ -16,4 +16,18 @@ def detect_dangerous_patterns(command_string, tokens):
     if ":(){ :|:& };:" in command_string:
         warnings.append("This is a fork bomb and will likely crash your system.")
 
+    # Sensitive file reads
+    sensitive_paths = {
+        "/etc/shadow": "Contains password hashes for system users (highly sensitive)",
+        "/etc/passwd": "Contains user account information (less sensitive but still private)",
+        "~/.ssh/id_rsa": "Private SSH key (highly sensitive)",
+        "~/.ssh/id_ed25519": "Private SSH key (highly sensitive)",
+        "/root/.ssh/id_rsa": "Root's private SSH key (highly sensitive)",
+    }
+    read_commands = {"cat", "less", "more", "head", "tail", "sed", "awk", "grep", "cut"}
+    if any(cmd in tokens for cmd in read_commands):
+        for tok in tokens:
+            if tok in sensitive_paths:
+                warnings.append(f"Reading sensitive file: {tok}. {sensitive_paths[tok]}.")
+
     return warnings
