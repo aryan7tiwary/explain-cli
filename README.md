@@ -12,7 +12,7 @@ Explain CLI is a Linux-focused tool that takes a shell command and produces a co
 System-wide (recommended):
 
 ```bash
-cd /home/aryan/Desktop/explain-cli
+cd explain-cli
 sudo ./setup.sh
 ```
 
@@ -22,7 +22,7 @@ User-only (no sudo) alternative:
 
 ```bash
 mkdir -p ~/.local/opt ~/.local/bin
-cp -r /home/aryan/Desktop/explain-cli ~/.local/opt/explain-cli
+cp -r /explain-cli ~/.local/opt/explain-cli
 printf '#!/bin/bash\nPYTHONPATH="$HOME/.local/opt/explain-cli" exec python3 "$HOME/.local/opt/explain-cli/cli.py" "$@"\n' > ~/.local/bin/explain-cli
 chmod +x ~/.local/bin/explain-cli
 echo 'Ensure ~/.local/bin is on your PATH'
