@@ -239,8 +239,14 @@ def main():
 
     if args.add_command:
         command, description, danger_level, flags_str = args.add_command
-        # a simple way to parse flags, assuming "-f:description, -g:description"
-        flags = dict(item.replace("'", "").split(":") for item in flags_str.split(",")) if flags_str else {}
+        # Parse flags provided as "-f:desc, -g:desc"; allow "none" to mean no flags
+        flags = {}
+        if flags_str and flags_str.strip().lower() not in {"none", "null", "nil", "-"}:
+            parts = [p.strip() for p in flags_str.split(",") if p.strip()]
+            for part in parts:
+                if ":" in part:
+                    k, v = part.split(":", 1)
+                    flags[k.strip().replace("'", "")] = v.strip().replace("'", "")
         add_custom_command(command, description, danger_level, flags)
         print(f"Command '{command}' added to the custom knowledge base.")
         return

@@ -6,5 +6,10 @@
             "-v": "verbose",
             "-d": "debug"
         }
+    },
+    "apropos": {
+        "description": "gives apt command for the description",
+        "danger_level": "none",
+        "flags": {}
     }
 }

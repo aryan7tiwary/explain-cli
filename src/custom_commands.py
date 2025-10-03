@@ -1,6 +1,9 @@
 import json
+import os
 
-KNOWLEDGE_BASE_PATH = "C:\\Users\\Aryan\\Desktop\\SafeShell\\explain-cli\\src\\custom_knowledge_base.json"
+# Store JSON next to this module, works both locally and when installed to /opt/explain-cli
+_MODULE_DIR = os.path.dirname(os.path.abspath(__file__))
+KNOWLEDGE_BASE_PATH = os.path.join(_MODULE_DIR, "custom_knowledge_base.json")
 
 def load_custom_commands():
     """Loads the custom knowledge base from the JSON file."""
