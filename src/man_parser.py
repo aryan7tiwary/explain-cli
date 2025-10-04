@@ -65,32 +65,66 @@ def _extract_flags(help_text: str) -> dict:
     Returns a dict mapping flag (e.g., "-a", "--all") to a short description.
     """
     flags: dict[str, str] = {}
-    for raw_line in help_text.splitlines():
-        line = raw_line.rstrip()
-        # Match lines that start with whitespace then a dash flag pattern
-        # Examples:
-        #   -a, --all               show all
-        #       --color[=WHEN]      colorize output
-        #   -l                      use a long listing format
-        m = re.match(r"^\s*(?:([\-]{1,2}[A-Za-z0-9][^,\s]*)\s*,\s*)?([\-]{1,2}[A-Za-z0-9][^\s]*)\s+(.*)$", line)
-        if m:
-            flag1, flag2, desc = m.groups()
-            desc = desc.strip()
-            # Stop overly long descriptions; keep concise first clause
-            desc = re.split(r"\s{2,}|\.$", desc)[0].strip() or desc
+    lines = help_text.splitlines()
+    i = 0
+    while i < len(lines):
+        line = lines[i].rstrip()
+        if not line or not line.strip():
+            i += 1
+            continue
+            
+        # Pattern 1: -a, --all               description (or description on next line)
+        m1 = re.match(r"^\s*(?:([\-]{1,2}[A-Za-z0-9][^,\s]*)\s*,\s*)?([\-]{1,2}[A-Za-z0-9][^\s]*)(?:\s+(.*))?$", line)
+        if m1:
+            flag1, flag2, desc = m1.groups()
+            desc = desc.strip() if desc else ""
+            
+            # Look for description on continuation lines (indented, no leading dash)
+            j = i + 1
+            while j < len(lines) and lines[j].startswith(" ") and not re.match(r"^\s*\-", lines[j]):
+                cont_line = lines[j].strip()
+                if cont_line and not cont_line.startswith("-"):
+                    if desc:
+                        desc += " " + cont_line
+                    else:
+                        desc = cont_line
+                j += 1
+            
+            # Take first sentence, but allow longer descriptions
+            if desc:
+                desc = re.split(r"\s{2,}|\.$", desc)[0].strip() or desc
+            
+            # Handle both flags, cleaning up commas
             for f in (flag1, flag2):
                 if f:
-                    # Normalize flags like "--color[=WHEN]" to "--color"
-                    normalized = re.sub(r"\[.*?\]|=.+", "", f)
-                    flags.setdefault(normalized, desc)
-        else:
-            # Also match simple single-flag lines like: "  -a    list all"
-            m2 = re.match(r"^\s*([\-]{1,2}[A-Za-z0-9])\s{2,}(.*)$", line)
-            if m2:
-                f, desc = m2.groups()
-                desc = desc.strip()
-                desc = re.split(r"\s{2,}|\.$", desc)[0].strip() or desc
-                flags.setdefault(f, desc)
+                    # Clean up trailing commas and normalize
+                    clean_flag = f.rstrip(',').strip()
+                    normalized = re.sub(r"\[.*?\]|=.+", "", clean_flag)
+                    if desc:  # Only add if we have a description
+                        flags[normalized] = desc  # Use direct assignment to ensure we get the description
+            i = j
+            continue
+            
+        # Pattern 2: -a    description (simple single flag)
+        m2 = re.match(r"^\s*([\-]{1,2}[A-Za-z0-9])\s{2,}(.*)$", line)
+        if m2:
+            f, desc = m2.groups()
+            desc = desc.strip()
+            
+            # Look for continuation lines
+            j = i + 1
+            while j < len(lines) and lines[j].startswith(" ") and not re.match(r"^\s*\-", lines[j]):
+                cont_line = lines[j].strip()
+                if cont_line and not cont_line.startswith("-"):
+                    desc += " " + cont_line
+                j += 1
+            
+            desc = re.split(r"\s{2,}|\.$", desc)[0].strip() or desc
+            flags.setdefault(f, desc)
+            i = j
+            continue
+            
+        i += 1
     return flags
 
 
@@ -162,5 +196,15 @@ def get_command_details(command: str) -> dict:
     man_flags = _extract_flags(man_text) if man_text else {}
     flags.update(man_flags)
     flags.update(help_flags)
+    
+    # Clean up any flags that have other flag names as values (like -T: --tcp)
+    cleaned_flags = {}
+    for flag, desc in flags.items():
+        # If description looks like another flag (starts with -), try to find the real description
+        if desc.startswith('-') and desc in flags:
+            cleaned_flags[flag] = flags[desc]
+        else:
+            cleaned_flags[flag] = desc
+    flags = cleaned_flags
 
     return {"summary": summary or help_text.splitlines()[0], "flags": flags}
