@@ -16,6 +16,68 @@ def _analyze_single_command(tokens, knowledge_base):
 
     command = tokens[0]
     args = tokens[1:]
+    
+    # Special handling for sudo - explain both sudo and the command it runs
+    if command == "sudo" and args:
+        # Explain sudo itself
+        if command in knowledge_base:
+            command_info = knowledge_base[command]
+            explanation.append(f"{command}: {command_info['description']}")
+            if command_info['danger_level'] in ["high", "critical"]:
+                warnings.append(f"The command '{command}' is considered {command_info['danger_level']} risk.")
+        
+        # Explain the command being run with sudo
+        sub_command = args[0]
+        sub_args = args[1:]
+        
+        if sub_command in knowledge_base:
+            sub_info = knowledge_base[sub_command]
+            explanation.append(f"  Executing: {sub_command} - {sub_info['description']}")
+            if sub_info['danger_level'] in ["high", "critical"]:
+                warnings.append(f"The command '{sub_command}' is considered {sub_info['danger_level']} risk.")
+            
+            # Explain flags for the sub-command
+            flags = sub_info.get("flags", {})
+            for arg in sub_args:
+                if arg.startswith("--") and arg in flags:
+                    explanation.append(f"    {arg}: {flags[arg]}")
+                elif arg.startswith("-") and len(arg) > 2:
+                    for char in arg[1:]:
+                        flag = f"-{char}"
+                        if flag in flags:
+                            explanation.append(f"    {flag}: {flags[flag]}")
+                elif arg in flags:
+                    explanation.append(f"    {arg}: {flags[arg]}")
+        else:
+            # Unknown sub-command - get details from man/help
+            details = get_command_details(sub_command)
+            if details.get("summary"):
+                explanation.append(f"  Executing: {details['summary']}")
+            
+            # Explain flags for the sub-command
+            flags = details.get("flags", {})
+            for arg in sub_args:
+                if arg.startswith("--"):
+                    name, eq, val = arg.partition('=')
+                    if name in flags:
+                        if eq and val:
+                            explanation.append(f"    {name}: {flags[name]} (value: {val})")
+                        else:
+                            explanation.append(f"    {name}: {flags[name]}")
+                elif arg.startswith("-") and len(arg) > 2:
+                    for char in arg[1:]:
+                        flag = f"-{char}"
+                        if flag in flags:
+                            explanation.append(f"    {flag}: {flags[flag]}")
+                elif arg in flags:
+                    explanation.append(f"    {arg}: {flags[arg]}")
+        
+        # Add remaining arguments
+        remaining_args = [arg for arg in sub_args if not arg.startswith("-")]
+        if remaining_args:
+            explanation.append(f"  Arguments: {', '.join(remaining_args)}")
+        
+        return explanation, warnings
 
     if command in knowledge_base:
         command_info = knowledge_base[command]
