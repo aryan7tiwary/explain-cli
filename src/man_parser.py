@@ -62,7 +62,7 @@ def _extract_summary(help_text: str) -> str:
 def _extract_flags(help_text: str) -> dict:
     """Heuristically extract flags and their descriptions from help/man text.
 
-    Returns a dict mapping flag (e.g., "-a", "--all") to a short description.
+    Returns a dict mapping flag (e.g., "-a", "--all", "-sC") to a short description.
     """
     flags: dict[str, str] = {}
     lines = help_text.splitlines()
@@ -124,8 +124,83 @@ def _extract_flags(help_text: str) -> dict:
             i = j
             continue
             
+        # Pattern 3: Combined flags like -sC, -sV (more flexible pattern)
+        m3 = re.match(r"^\s*([\-]{1,2}[A-Za-z0-9]+[A-Z]?)\s+(.*)$", line)
+        if m3:
+            f, desc = m3.groups()
+            desc = desc.strip()
+            
+            # Look for continuation lines
+            j = i + 1
+            while j < len(lines) and lines[j].startswith(" ") and not re.match(r"^\s*\-", lines[j]):
+                cont_line = lines[j].strip()
+                if cont_line and not cont_line.startswith("-"):
+                    desc += " " + cont_line
+                j += 1
+            
+            # Clean up description
+            desc = re.split(r"\s{2,}|\.$", desc)[0].strip() or desc
+            if desc and len(desc) > 3:  # Only add if we have a meaningful description
+                flags[f] = desc
+            i = j
+            continue
+            
+        # Pattern 4: Look for flags in man page format like "-sC" or "--script"
+        m4 = re.search(r'([\-]{1,2}[A-Za-z0-9]+[A-Z]?)\s+([A-Z][^\.]*\.?)', line)
+        if m4 and not any(pattern in line.lower() for pattern in ['usage:', 'synopsis:', 'example:']):
+            flag, desc = m4.groups()
+            desc = desc.strip()
+            if desc and len(desc) > 3:
+                flags[flag] = desc
+                
+        # Pattern 5: Look for flags with better description capture
+        m5 = re.match(r'^\s*([\-]{1,2}[A-Za-z0-9]+[A-Z]?)\s+(.*)$', line)
+        if m5 and not any(pattern in line.lower() for pattern in ['usage:', 'synopsis:', 'example:']):
+            flag, desc = m5.groups()
+            desc = desc.strip()
+            
+            # Look for continuation lines
+            j = i + 1
+            while j < len(lines) and lines[j].startswith(" ") and not re.match(r"^\s*\-", lines[j]):
+                cont_line = lines[j].strip()
+                if cont_line and not cont_line.startswith("-"):
+                    desc += " " + cont_line
+                j += 1
+            
+            # Clean up description
+            if desc and len(desc) > 3:
+                # Take first sentence or reasonable length
+                desc = re.split(r'\.\s+', desc)[0].strip()
+                if not desc.endswith('.'):
+                    desc += '.'
+                flags[flag] = desc
+            i = j
+            continue
+            
         i += 1
-    return flags
+    
+    # Post-process to handle common flag patterns and clean up
+    cleaned_flags = {}
+    for flag, desc in flags.items():
+        # Skip very short or unclear descriptions
+        if len(desc) < 3 or desc.lower() in ['flag', 'option', 'argument']:
+            continue
+            
+        # Clean up the flag name
+        clean_flag = flag.strip()
+        
+        # Handle flags with parameters like -p<port>
+        if '<' in clean_flag and '>' in clean_flag:
+            clean_flag = re.sub(r'<[^>]*>', '', clean_flag)
+        
+        # Handle flags with equals like --script=<script>
+        if '=' in clean_flag:
+            clean_flag = clean_flag.split('=')[0]
+            
+        if clean_flag and desc:
+            cleaned_flags[clean_flag] = desc
+    
+    return cleaned_flags
 
 
 def _get_full_help_text(command: str) -> str:

@@ -42,10 +42,15 @@ def _analyze_single_command(tokens, knowledge_base):
                 if arg.startswith("--") and arg in flags:
                     explanation.append(f"    {arg}: {flags[arg]}")
                 elif arg.startswith("-") and len(arg) > 2:
-                    for char in arg[1:]:
-                        flag = f"-{char}"
-                        if flag in flags:
-                            explanation.append(f"    {flag}: {flags[flag]}")
+                    # First check if the entire flag exists (for combined flags like -sC, -sV)
+                    if arg in flags:
+                        explanation.append(f"    {arg}: {flags[arg]}")
+                    else:
+                        # If not found as a combined flag, try individual characters
+                        for char in arg[1:]:
+                            flag = f"-{char}"
+                            if flag in flags:
+                                explanation.append(f"    {flag}: {flags[flag]}")
                 elif arg in flags:
                     explanation.append(f"    {arg}: {flags[arg]}")
         else:
@@ -65,17 +70,46 @@ def _analyze_single_command(tokens, knowledge_base):
                         else:
                             explanation.append(f"    {name}: {flags[name]}")
                 elif arg.startswith("-") and len(arg) > 2:
-                    for char in arg[1:]:
-                        flag = f"-{char}"
-                        if flag in flags:
-                            explanation.append(f"    {flag}: {flags[flag]}")
+                    # First check if the entire flag exists (for combined flags like -sC, -sV)
+                    if arg in flags:
+                        explanation.append(f"    {arg}: {flags[arg]}")
+                    else:
+                        # If not found as a combined flag, try individual characters
+                        for char in arg[1:]:
+                            flag = f"-{char}"
+                            if flag in flags:
+                                explanation.append(f"    {flag}: {flags[flag]}")
                 elif arg in flags:
                     explanation.append(f"    {arg}: {flags[arg]}")
         
-        # Add remaining arguments
-        remaining_args = [arg for arg in sub_args if not arg.startswith("-")]
-        if remaining_args:
-            explanation.append(f"  Arguments: {', '.join(remaining_args)}")
+        # Handle special sub-commands that need custom parsing
+        if sub_command == "find" and sub_args:
+            explanation.append(f"  search_path: {sub_args[0]}")
+            i = 1
+            while i < len(sub_args):
+                arg = sub_args[i]
+                if arg == "-name" and i + 1 < len(sub_args):
+                    explanation.append(f"    -name: find files matching pattern '{sub_args[i+1]}'")
+                    i += 2
+                elif arg == "-type" and i + 1 < len(sub_args):
+                    type_desc = {"f": "regular file", "d": "directory", "l": "symbolic link"}.get(sub_args[i+1], sub_args[i+1])
+                    explanation.append(f"    -type: find items of type '{type_desc}'")
+                    i += 2
+                elif arg == "-exec" and i + 1 < len(sub_args):
+                    explanation.append(f"    -exec: execute command '{sub_args[i+1]}' on found files")
+                    i += 2
+                elif arg == "-delete":
+                    explanation.append(f"    -delete: delete found files (dangerous)")
+                    warnings.append("The -delete flag will permanently remove files")
+                    i += 1
+                else:
+                    explanation.append(f"    argument: {arg}")
+                    i += 1
+        else:
+            # Add remaining arguments for other commands
+            remaining_args = [arg for arg in sub_args if not arg.startswith("-")]
+            if remaining_args:
+                explanation.append(f"  Arguments: {', '.join(remaining_args)}")
         
         return explanation, warnings
 
@@ -86,6 +120,10 @@ def _analyze_single_command(tokens, knowledge_base):
             warnings.append(f"The command '{command}' is considered {command_info['danger_level']} risk.")
 
         flags = command_info.get("flags", {})
+        # If no flags in knowledge base, try to get them dynamically
+        if not flags:
+            details = get_command_details(command)
+            flags = details.get("flags", {})
         used_flags = []
         i = 0
         while i < len(args):
@@ -101,10 +139,15 @@ def _analyze_single_command(tokens, knowledge_base):
                     else:
                         explanation.append(f"  {name}: {flags[name]}")
             elif arg.startswith("-") and len(arg) > 2:
-                for char in arg[1:]:
-                    flag = f"-{char}"
-                    if flag in flags:
-                        explanation.append(f"  {flag}: {flags[flag]}")
+                # First check if the entire flag exists (for combined flags like -sC, -sV)
+                if arg in flags:
+                    explanation.append(f"  {arg}: {flags[arg]}")
+                else:
+                    # If not found as a combined flag, try individual characters
+                    for char in arg[1:]:
+                        flag = f"-{char}"
+                        if flag in flags:
+                            explanation.append(f"  {flag}: {flags[flag]}")
             elif arg in flags:
                 # Short flag possibly with a following value
                 if i + 1 < len(args) and not args[i+1].startswith('-'):
@@ -132,10 +175,15 @@ def _analyze_single_command(tokens, knowledge_base):
                     else:
                         explanation.append(f"  {name}: {flags[name]}")
             elif arg.startswith("-") and len(arg) > 2:
-                for char in arg[1:]:
-                    flag = f"-{char}"
-                    if flag in flags:
-                        explanation.append(f"  {flag}: {flags[flag]}")
+                # First check if the entire flag exists (for combined flags like -sC, -sV)
+                if arg in flags:
+                    explanation.append(f"  {arg}: {flags[arg]}")
+                else:
+                    # If not found as a combined flag, try individual characters
+                    for char in arg[1:]:
+                        flag = f"-{char}"
+                        if flag in flags:
+                            explanation.append(f"  {flag}: {flags[flag]}")
             elif arg in flags:
                 if i + 1 < len(args) and not args[i+1].startswith('-'):
                     explanation.append(f"  {arg}: {flags[arg]} (value: {args[i+1]})")
@@ -169,7 +217,8 @@ def _analyze_single_command(tokens, knowledge_base):
                 explanation.append(sig_exp)
                 if arg == '-s' and next_arg and not next_arg.startswith('-'):
                     consumed.add(i+1)
-        if arg.startswith('--'):
+        # Skip flag parsing for find command - handle it specially later
+        elif command != "find" and arg.startswith('--'):
             name, eq, val = arg.partition('=')
             if eq and val:
                 pass
@@ -191,7 +240,31 @@ def _analyze_single_command(tokens, knowledge_base):
         i += 1
 
     positional_args = [arg for idx, arg in enumerate(args) if idx not in consumed and idx not in redir_target_indices and not arg.startswith("-")]
-    if command == "grep" and positional_args:
+    
+    # Special handling for find command (before other command-specific logic)
+    if command == "find" and args:
+        explanation.append(f"  search_path: {args[0]}")
+        i = 1
+        while i < len(args):
+            arg = args[i]
+            if arg == "-name" and i + 1 < len(args):
+                explanation.append(f"  -name: find files matching pattern '{args[i+1]}'")
+                i += 2
+            elif arg == "-type" and i + 1 < len(args):
+                type_desc = {"f": "regular file", "d": "directory", "l": "symbolic link"}.get(args[i+1], args[i+1])
+                explanation.append(f"  -type: find items of type '{type_desc}'")
+                i += 2
+            elif arg == "-exec" and i + 1 < len(args):
+                explanation.append(f"  -exec: execute command '{args[i+1]}' on found files")
+                i += 2
+            elif arg == "-delete":
+                explanation.append(f"  -delete: delete found files (dangerous)")
+                warnings.append("The -delete flag will permanently remove files")
+                i += 1
+            else:
+                explanation.append(f"  argument: {arg}")
+                i += 1
+    elif command == "grep" and positional_args:
         explanation.append(f"  pattern: {positional_args[0]}")
         if looks_like_regex(positional_args[0]):
             explanation.append(f"  regex: {explain_regex(positional_args[0])}")
@@ -271,10 +344,12 @@ def analyze_command(tokens, knowledge_base):
     segments = []
     current = []
     for tok in tokens:
-        if tok == '|':
+        if tok in ['|', '&&', '||', ';']:
             if current:
                 segments.append(current)
                 current = []
+            # Add the operator as a separate segment for explanation
+            segments.append([tok])
         else:
             current.append(tok)
     if current:
@@ -283,10 +358,21 @@ def analyze_command(tokens, knowledge_base):
     all_explanations = []
     all_warnings = []
     for segment in segments:
-        exp, warns = _analyze_single_command(segment, knowledge_base)
-        all_explanations.extend(exp)
-        all_warnings.extend(warns)
-    # Removed global regex scan to avoid false positives on paths/IPs
+        if len(segment) == 1 and segment[0] in ['&&', '||', ';', '|']:
+            # Explain operators
+            op = segment[0]
+            if op == '&&':
+                all_explanations.append(f"  {op}: Execute next command only if previous command succeeds")
+            elif op == '||':
+                all_explanations.append(f"  {op}: Execute next command only if previous command fails")
+            elif op == ';':
+                all_explanations.append(f"  {op}: Execute next command regardless of previous command's result")
+            elif op == '|':
+                all_explanations.append(f"  {op}: Pipe the output of the previous command as input to the next command")
+        else:
+            exp, warns = _analyze_single_command(segment, knowledge_base)
+            all_explanations.extend(exp)
+            all_warnings.extend(warns)
     return all_explanations, all_warnings
 
 def main():
