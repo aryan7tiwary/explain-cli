@@ -403,6 +403,11 @@ def main():
         parser.print_help()
         return
 
+    # Validate input length to prevent DoS attacks
+    if len(args.command_string) > 10000:
+        print("Error: Command string too long (max 10000 characters)")
+        return
+
     tokens = tokenize_command(args.command_string)
     
     explanation, analysis_warnings = analyze_command(tokens, knowledge_base)

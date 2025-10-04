@@ -1,6 +1,23 @@
 import subprocess
 import sys
 import re
+import os
+
+def _validate_command_name(command):
+    """Validate command name to prevent injection attacks."""
+    # Only allow alphanumeric characters, hyphens, underscores, and dots
+    if not re.match(r'^[a-zA-Z0-9._-]+$', command):
+        raise ValueError(f"Invalid command name: {command}")
+    
+    # Prevent path traversal
+    if '/' in command or '\\' in command:
+        raise ValueError(f"Command name cannot contain path separators: {command}")
+    
+    # Prevent command chaining
+    if any(char in command for char in [';', '&', '|', '`', '$', '(', ')', '<', '>']):
+        raise ValueError(f"Command name contains dangerous characters: {command}")
+    
+    return command
 
 def _parse_man_page(man_page_text):
     name_match = re.search(r'NAME\n\s*(.*)', man_page_text)
@@ -21,6 +38,12 @@ def _parse_help_output(help_text):
 def get_command_help(command):
     if sys.platform != "linux":
         return "This tool is designed for Linux. Cannot fetch command help on other platforms."
+
+    # Validate command name first
+    try:
+        command = _validate_command_name(command)
+    except ValueError as e:
+        return f"Security error: {e}"
 
     # Check if command exists
     try:
@@ -211,6 +234,12 @@ def _get_full_help_text(command: str) -> str:
     """
     if sys.platform != "linux":
         return "This tool is designed for Linux. Cannot fetch command help on other platforms."
+
+    # Validate command name first
+    try:
+        command = _validate_command_name(command)
+    except ValueError as e:
+        return f"Security error: {e}"
 
     # Check if command exists
     try:
