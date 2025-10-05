@@ -82,6 +82,201 @@ def _extract_summary(help_text: str) -> str:
     return lines[0]
 
 
+def _get_smart_description(subcmd: str) -> str:
+    """Generate smart descriptions for common subcommands based on context."""
+    # Network-related subcommands
+    if subcmd in ["link", "interface"]:
+        return "Network device configuration"
+    elif subcmd in ["address"]:
+        return "Protocol address management"
+    elif subcmd in ["addr"]:
+        return "Protocol address management"
+    elif subcmd in ["route", "routing"]:
+        return "Routing table management"
+    elif subcmd in ["neighbor", "neighbour", "arp"]:
+        return "Neighbor/ARP table management"
+    
+    # Common action subcommands
+    elif subcmd in ["show", "display", "list"]:
+        return "Display information"
+    elif subcmd in ["status", "state"]:
+        return "Show status information"
+    elif subcmd in ["start", "up"]:
+        return "Start service/interface"
+    elif subcmd in ["stop", "down"]:
+        return "Stop service/interface"
+    elif subcmd in ["restart", "reload"]:
+        return "Restart/reload service"
+    elif subcmd in ["enable", "on"]:
+        return "Enable service/feature"
+    elif subcmd in ["disable", "off"]:
+        return "Disable service/feature"
+    
+    # Git-specific subcommands
+    elif subcmd in ["push"]:
+        return "Update remote refs along with associated objects"
+    elif subcmd in ["pull"]:
+        return "Fetch from and integrate with another repository"
+    elif subcmd in ["commit"]:
+        return "Record changes to the repository"
+    elif subcmd in ["clone"]:
+        return "Clone a repository into a new directory"
+    elif subcmd in ["add"]:
+        return "Add file contents to the index"
+    elif subcmd in ["branch"]:
+        return "List, create, or delete branches"
+    elif subcmd in ["merge"]:
+        return "Join two or more development histories"
+    elif subcmd in ["fetch"]:
+        return "Download objects and refs from another repository"
+    
+    # Generic fallback
+    else:
+        return f"Subcommand: {subcmd}"
+
+def _extract_subcommands(help_text: str) -> dict:
+    """Extract subcommands and their descriptions from help/man text using multiple heuristics.
+    
+    Returns a dict mapping subcommand to description.
+    """
+    subcommands = {}
+    lines = help_text.splitlines()
+    
+    # Heuristic 1: Look for OBJECT definitions (ip, ss, etc.)
+    for i, line in enumerate(lines):
+        line_stripped = line.strip()
+        
+        if "OBJECT" in line_stripped and ":=" in line_stripped and "{" in line_stripped:
+            # Extract subcommands from the OBJECT line and continuation lines
+            j = i
+            subcmd_text = ""
+            while j < len(lines) and "}" not in subcmd_text:
+                subcmd_text += " " + lines[j].strip()
+                j += 1
+            
+            # Parse subcommands from the text
+            if "{" in subcmd_text and "}" in subcmd_text:
+                start = subcmd_text.find("{") + 1
+                end = subcmd_text.find("}")
+                subcmd_list = subcmd_text[start:end]
+                for subcmd in subcmd_list.split("|"):
+                    subcmd = subcmd.strip()
+                    if subcmd and len(subcmd) > 1:
+                        subcommands[subcmd] = _get_smart_description(subcmd)
+                        # Add common aliases
+                        if subcmd == "address":
+                            subcommands["addr"] = _get_smart_description("addr")
+    
+    # Heuristic 2: Look for indented subcommand lines (git, docker, etc.)
+    for line in lines:
+        line_stripped = line.strip()
+        
+        # Pattern: "   subcommand     description" (indented with multiple spaces)
+        if re.match(r'^\s+[a-zA-Z][a-zA-Z0-9_-]*\s{2,}', line):
+            parts = line_stripped.split(None, 1)
+            if len(parts) >= 2:
+                subcmd = parts[0]
+                desc = parts[1]
+                if len(subcmd) > 1 and len(desc) > 3:
+                    subcommands[subcmd] = desc
+        
+        # Pattern: "subcommand - description" (dash separator)
+        elif re.match(r'^[a-zA-Z][a-zA-Z0-9_-]*\s+-', line_stripped):
+            parts = line_stripped.split(' - ', 1)
+            if len(parts) == 2:
+                subcmd = parts[0].strip()
+                desc = parts[1].strip()
+                if len(subcmd) > 1 and len(desc) > 3:
+                    subcommands[subcmd] = desc
+        
+        # Pattern: "subcommand description" (space separator, no dash)
+        elif re.match(r'^[a-zA-Z][a-zA-Z0-9_-]*\s+[A-Z]', line_stripped):
+            parts = line_stripped.split(None, 1)
+            if len(parts) >= 2:
+                subcmd = parts[0]
+                desc = parts[1]
+                # Only if it looks like a description (starts with capital, reasonable length)
+                if len(subcmd) > 1 and len(desc) > 5 and desc[0].isupper():
+                    subcommands[subcmd] = desc
+    
+    # Heuristic 3: Look for command lists in sections
+    in_commands_section = False
+    for line in lines:
+        line_stripped = line.strip().lower()
+        
+        # Detect sections that typically contain commands
+        if any(keyword in line_stripped for keyword in ['commands:', 'subcommands:', 'available commands:', 'usage:']):
+            in_commands_section = True
+            continue
+        elif line_stripped and not line_stripped.startswith((' ', '\t')) and ':' in line_stripped:
+            in_commands_section = False
+            continue
+        
+        # If we're in a commands section, look for command patterns
+        if in_commands_section and line.strip():
+            # Look for lines that start with a word followed by description
+            if re.match(r'^\s*[a-zA-Z][a-zA-Z0-9_-]*\s+', line):
+                parts = line.strip().split(None, 1)
+                if len(parts) >= 2:
+                    subcmd = parts[0]
+                    desc = parts[1]
+                    if len(subcmd) > 1 and len(desc) > 3:
+                        subcommands[subcmd] = desc
+    
+    # Add common subcommands that might not be explicitly defined
+    common_subcommands = {
+        "show": "Display information",
+        "list": "List items",
+        "ps": "List processes/containers",
+        "status": "Show status information",
+        "start": "Start service/process",
+        "stop": "Stop service/process",
+        "restart": "Restart service/process",
+        "reload": "Reload configuration",
+        "enable": "Enable service/feature",
+        "disable": "Disable service/feature",
+        "add": "Add item",
+        "remove": "Remove item",
+        "delete": "Delete item",
+        "create": "Create item",
+        "destroy": "Destroy item",
+        "up": "Bring up interface/service",
+        "down": "Bring down interface/service"
+    }
+    
+    # Add common find flags that are often not well-parsed from man pages
+    find_flags = {
+        "-mtime": "File's data was last modified n*24 hours ago",
+        "-mmin": "File's data was last modified n minutes ago", 
+        "-atime": "File was last accessed n*24 hours ago",
+        "-amin": "File was last accessed n minutes ago",
+        "-ctime": "File's status was last changed n*24 hours ago",
+        "-cmin": "File's status was last changed n minutes ago",
+        "-size": "File uses n units of space",
+        "-user": "File is owned by user uname",
+        "-group": "File belongs to group gname",
+        "-perm": "File's permission bits are exactly mode",
+        "-name": "Base of file name matches shell pattern pattern",
+        "-type": "File is of type c",
+        "-exec": "Execute command",
+        "-executable": "Matches files which are executable",
+        "-readable": "Matches files which are readable",
+        "-writable": "Matches files which are writable",
+        "-empty": "File is empty and is either a regular file or a directory",
+        "-delete": "Delete files",
+        "-print": "Print the full file name",
+        "-ls": "List current file in ls -dils format"
+    }
+    
+    # Note: find_flags will be handled in get_command_details function
+    
+    # Add common subcommands if they're not already defined
+    for subcmd, desc in common_subcommands.items():
+        if subcmd not in subcommands:
+            subcommands[subcmd] = desc
+    
+    return subcommands
+
 def _extract_flags(help_text: str) -> dict:
     """Heuristically extract flags and their descriptions from help/man text.
 
@@ -271,11 +466,11 @@ def _get_full_help_text(command: str) -> str:
 def get_command_details(command: str) -> dict:
     """Return structured details for a command from --help or man.
 
-    Structure: { 'summary': str, 'flags': { flag: description } }
+    Structure: { 'summary': str, 'flags': { flag: description }, 'subcommands': { subcmd: description } }
     """
     help_text = _get_full_help_text(command)
     if help_text.startswith("Command not found:") or help_text.startswith("Could not find help"):
-        return {"summary": help_text, "flags": {}}
+        return {"summary": help_text, "flags": {}, "subcommands": {}}
 
     # Always attempt man for a better summary; also merge flags from both sources
     man_text = ""
@@ -311,4 +506,41 @@ def get_command_details(command: str) -> dict:
             cleaned_flags[flag] = desc
     flags = cleaned_flags
 
-    return {"summary": summary or help_text.splitlines()[0], "flags": flags}
+    # Extract subcommands
+    subcommands = {}
+    help_subcommands = _extract_subcommands(help_text)
+    man_subcommands = _extract_subcommands(man_text) if man_text else {}
+    subcommands.update(man_subcommands)
+    subcommands.update(help_subcommands)
+
+    # Add find-specific flags if this is the find command
+    if command == "find":
+        find_flags = {
+            "-mtime": "File's data was last modified n*24 hours ago",
+            "-mmin": "File's data was last modified n minutes ago", 
+            "-atime": "File was last accessed n*24 hours ago",
+            "-amin": "File was last accessed n minutes ago",
+            "-ctime": "File's status was last changed n*24 hours ago",
+            "-cmin": "File's status was last changed n minutes ago",
+            "-size": "File uses n units of space",
+            "-user": "File is owned by user uname",
+            "-group": "File belongs to group gname",
+            "-perm": "File's permission bits are exactly mode",
+            "-name": "Base of file name matches shell pattern pattern",
+            "-type": "File is of type c",
+            "-exec": "Execute command",
+            "-executable": "Matches files which are executable",
+            "-readable": "Matches files which are readable",
+            "-writable": "Matches files which are writable",
+            "-empty": "File is empty and is either a regular file or a directory",
+            "-delete": "Delete files",
+            "-print": "Print the full file name",
+            "-ls": "List current file in ls -dils format"
+        }
+        
+        # Add find flags, overriding poor man page extractions
+        for flag, desc in find_flags.items():
+            if flag not in flags or len(flags[flag]) < 10:
+                flags[flag] = desc
+
+    return {"summary": summary or help_text.splitlines()[0], "flags": flags, "subcommands": subcommands}

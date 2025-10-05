@@ -59,8 +59,9 @@ def _analyze_single_command(tokens, knowledge_base):
             if details.get("summary"):
                 explanation.append(f"  Executing: {details['summary']}")
             
-            # Explain flags for the sub-command
+            # Explain flags and subcommands for the sub-command
             flags = details.get("flags", {})
+            subcommands = details.get("subcommands", {})
             for arg in sub_args:
                 if arg.startswith("--"):
                     name, eq, val = arg.partition('=')
@@ -81,26 +82,108 @@ def _analyze_single_command(tokens, knowledge_base):
                                 explanation.append(f"    {flag}: {flags[flag]}")
                 elif arg in flags:
                     explanation.append(f"    {arg}: {flags[arg]}")
+                elif arg in subcommands:
+                    explanation.append(f"    {arg}: {subcommands[arg]}")
         
         # Handle special sub-commands that need custom parsing
         if sub_command == "find" and sub_args:
             explanation.append(f"  search_path: {sub_args[0]}")
+            
+            # Get find flags from man page for dynamic parsing
+            details = get_command_details("find")
+            find_flags = details.get("flags", {})
+            
             i = 1
             while i < len(sub_args):
                 arg = sub_args[i]
-                if arg == "-name" and i + 1 < len(sub_args):
-                    explanation.append(f"    -name: find files matching pattern '{sub_args[i+1]}'")
-                    i += 2
-                elif arg == "-type" and i + 1 < len(sub_args):
-                    type_desc = {"f": "regular file", "d": "directory", "l": "symbolic link"}.get(sub_args[i+1], sub_args[i+1])
-                    explanation.append(f"    -type: find items of type '{type_desc}'")
-                    i += 2
-                elif arg == "-exec" and i + 1 < len(sub_args):
-                    explanation.append(f"    -exec: execute command '{sub_args[i+1]}' on found files")
-                    i += 2
-                elif arg == "-delete":
-                    explanation.append(f"    -delete: delete found files (dangerous)")
-                    warnings.append("The -delete flag will permanently remove files")
+                
+                # Handle flags that take values
+                if arg in find_flags and i + 1 < len(sub_args):
+                    next_arg = sub_args[i+1]
+                    # Check if next argument is a value (not another flag)
+                    is_value = (
+                        not next_arg.startswith('-') or  # Not a flag
+                        next_arg[1:].isdigit() or        # Negative number like -7
+                        next_arg.startswith('+') or      # Positive number like +30
+                        next_arg in ['{}', ';'] or       # Special find tokens
+                        (len(next_arg) > 1 and next_arg[1] in '0123456789')  # Negative number
+                    )
+                    
+                    if is_value:
+                        value = next_arg
+                        if arg == "-name":
+                            explanation.append(f"    -name: find files matching pattern '{value}'")
+                        elif arg == "-type":
+                            type_desc = {"f": "regular file", "d": "directory", "l": "symbolic link"}.get(value, value)
+                            explanation.append(f"    -type: find items of type '{type_desc}'")
+                        elif arg == "-mtime":
+                            if value.startswith('+'):
+                                explanation.append(f"    -mtime: find files modified more than {value[1:]} days ago")
+                            elif value.startswith('-'):
+                                explanation.append(f"    -mtime: find files modified less than {value[1:]} days ago")
+                            else:
+                                explanation.append(f"    -mtime: find files modified exactly {value} days ago")
+                        elif arg == "-mmin":
+                            if value.startswith('+'):
+                                explanation.append(f"    -mmin: find files modified more than {value[1:]} minutes ago")
+                            elif value.startswith('-'):
+                                explanation.append(f"    -mmin: find files modified less than {value[1:]} minutes ago")
+                            else:
+                                explanation.append(f"    -mmin: find files modified exactly {value} minutes ago")
+                        elif arg == "-size":
+                            explanation.append(f"    -size: find files of size {value}")
+                        elif arg == "-user":
+                            explanation.append(f"    -user: find files owned by user '{value}'")
+                        elif arg == "-group":
+                            explanation.append(f"    -group: find files owned by group '{value}'")
+                        elif arg == "-perm":
+                            explanation.append(f"    -perm: find files with permissions {value}")
+                        elif arg == "-exec":
+                            explanation.append(f"    -exec: execute command '{value}' on found files")
+                        else:
+                            explanation.append(f"    {arg}: {find_flags[arg]} (value: {value})")
+                        i += 2
+                    else:
+                        # Not a value, treat as flag without value
+                        if arg == "-delete":
+                            explanation.append(f"    -delete: delete found files (dangerous)")
+                            warnings.append("The -delete flag will permanently remove files")
+                        elif arg == "-print":
+                            explanation.append(f"    -print: print found files (default action)")
+                        elif arg == "-ls":
+                            explanation.append(f"    -ls: list found files in long format")
+                        elif arg == "-executable":
+                            explanation.append(f"    -executable: find executable files")
+                        elif arg == "-readable":
+                            explanation.append(f"    -readable: find readable files")
+                        elif arg == "-writable":
+                            explanation.append(f"    -writable: find writable files")
+                        else:
+                            explanation.append(f"    {arg}: {find_flags[arg]}")
+                        i += 1
+                elif arg in find_flags:
+                    # Flag without value
+                    if arg == "-delete":
+                        explanation.append(f"    -delete: delete found files (dangerous)")
+                        warnings.append("The -delete flag will permanently remove files")
+                    elif arg == "-print":
+                        explanation.append(f"    -print: print found files (default action)")
+                    elif arg == "-ls":
+                        explanation.append(f"    -ls: list found files in long format")
+                    elif arg == "-executable":
+                        explanation.append(f"    -executable: find executable files")
+                    elif arg == "-readable":
+                        explanation.append(f"    -readable: find readable files")
+                    elif arg == "-writable":
+                        explanation.append(f"    -writable: find writable files")
+                    else:
+                        explanation.append(f"    {arg}: {find_flags[arg]}")
+                    i += 1
+                elif arg == "{}":
+                    # This is part of -exec, skip it
+                    i += 1
+                elif arg == ";":
+                    # End of -exec command
                     i += 1
                 else:
                     explanation.append(f"    argument: {arg}")
@@ -161,6 +244,8 @@ def _analyze_single_command(tokens, knowledge_base):
         if details.get("summary"):
             explanation.append(details["summary"])
         flags = details.get("flags", {})
+        subcommands = details.get("subcommands", {})
+        
         i = 0
         while i < len(args):
             arg = args[i]
@@ -190,6 +275,9 @@ def _analyze_single_command(tokens, knowledge_base):
                     i += 1
                 else:
                     explanation.append(f"  {arg}: {flags[arg]}")
+            elif arg in subcommands:
+                # Handle subcommands
+                explanation.append(f"  {arg}: {subcommands[arg]}")
             i += 1
 
     # Detect I/O redirections in args and mark consumed indices
@@ -239,27 +327,121 @@ def _analyze_single_command(tokens, knowledge_base):
                 i += 1
         i += 1
 
-    positional_args = [arg for idx, arg in enumerate(args) if idx not in consumed and idx not in redir_target_indices and not arg.startswith("-")]
+    # Filter out recognized subcommands from positional args
+    recognized_subcommands = set()
+    if command in knowledge_base:
+        # For commands in knowledge base, check if they have subcommands
+        details = get_command_details(command)
+        recognized_subcommands = set(details.get("subcommands", {}).keys())
+    else:
+        # For commands not in knowledge base, get subcommands from man parser
+        details = get_command_details(command)
+        recognized_subcommands = set(details.get("subcommands", {}).keys())
+    
+    positional_args = [arg for idx, arg in enumerate(args) if idx not in consumed and idx not in redir_target_indices and not arg.startswith("-") and arg not in recognized_subcommands]
     
     # Special handling for find command (before other command-specific logic)
     if command == "find" and args:
         explanation.append(f"  search_path: {args[0]}")
+        
+        # Get find flags from man page for dynamic parsing
+        details = get_command_details("find")
+        find_flags = details.get("flags", {})
+        
         i = 1
         while i < len(args):
             arg = args[i]
-            if arg == "-name" and i + 1 < len(args):
-                explanation.append(f"  -name: find files matching pattern '{args[i+1]}'")
-                i += 2
-            elif arg == "-type" and i + 1 < len(args):
-                type_desc = {"f": "regular file", "d": "directory", "l": "symbolic link"}.get(args[i+1], args[i+1])
-                explanation.append(f"  -type: find items of type '{type_desc}'")
-                i += 2
-            elif arg == "-exec" and i + 1 < len(args):
-                explanation.append(f"  -exec: execute command '{args[i+1]}' on found files")
-                i += 2
-            elif arg == "-delete":
-                explanation.append(f"  -delete: delete found files (dangerous)")
-                warnings.append("The -delete flag will permanently remove files")
+            
+            # Handle flags that take values
+            if arg in find_flags and i + 1 < len(args):
+                next_arg = args[i+1]
+                # Check if next argument is a value (not another flag)
+                # Values can be: numbers, negative numbers, patterns, etc.
+                is_value = (
+                    not next_arg.startswith('-') or  # Not a flag
+                    next_arg[1:].isdigit() or        # Negative number like -7
+                    next_arg.startswith('+') or      # Positive number like +30
+                    next_arg in ['{}', ';'] or       # Special find tokens
+                    (len(next_arg) > 1 and next_arg[1] in '0123456789')  # Negative number
+                )
+                
+                if is_value:
+                    value = next_arg
+                    if arg == "-name":
+                        explanation.append(f"  -name: find files matching pattern '{value}'")
+                    elif arg == "-type":
+                        type_desc = {"f": "regular file", "d": "directory", "l": "symbolic link"}.get(value, value)
+                        explanation.append(f"  -type: find items of type '{type_desc}'")
+                    elif arg == "-mtime":
+                        if value.startswith('+'):
+                            explanation.append(f"  -mtime: find files modified more than {value[1:]} days ago")
+                        elif value.startswith('-'):
+                            explanation.append(f"  -mtime: find files modified less than {value[1:]} days ago")
+                        else:
+                            explanation.append(f"  -mtime: find files modified exactly {value} days ago")
+                    elif arg == "-mmin":
+                        if value.startswith('+'):
+                            explanation.append(f"  -mmin: find files modified more than {value[1:]} minutes ago")
+                        elif value.startswith('-'):
+                            explanation.append(f"  -mmin: find files modified less than {value[1:]} minutes ago")
+                        else:
+                            explanation.append(f"  -mmin: find files modified exactly {value} minutes ago")
+                    elif arg == "-size":
+                        explanation.append(f"  -size: find files of size {value}")
+                    elif arg == "-user":
+                        explanation.append(f"  -user: find files owned by user '{value}'")
+                    elif arg == "-group":
+                        explanation.append(f"  -group: find files owned by group '{value}'")
+                    elif arg == "-perm":
+                        explanation.append(f"  -perm: find files with permissions {value}")
+                    elif arg == "-exec":
+                        explanation.append(f"  -exec: execute command '{value}' on found files")
+                    else:
+                        explanation.append(f"  {arg}: {find_flags[arg]} (value: {value})")
+                    i += 2
+                else:
+                    # Not a value, treat as flag without value
+                    if arg == "-delete":
+                        explanation.append(f"  -delete: delete found files (dangerous)")
+                        warnings.append("The -delete flag will permanently remove files")
+                    elif arg == "-print":
+                        explanation.append(f"  -print: print found files (default action)")
+                    elif arg == "-ls":
+                        explanation.append(f"  -ls: list found files in long format")
+                    elif arg == "-executable":
+                        explanation.append(f"  -executable: find executable files")
+                    elif arg == "-readable":
+                        explanation.append(f"  -readable: find readable files")
+                    elif arg == "-writable":
+                        explanation.append(f"  -writable: find writable files")
+                    else:
+                        explanation.append(f"  {arg}: {find_flags[arg]}")
+                    i += 1
+            elif arg in find_flags:
+                # Flag without value
+                if arg == "-delete":
+                    explanation.append(f"  -delete: delete found files (dangerous)")
+                    warnings.append("The -delete flag will permanently remove files")
+                elif arg == "-print":
+                    explanation.append(f"  -print: print found files (default action)")
+                elif arg == "-ls":
+                    explanation.append(f"  -ls: list found files in long format")
+                elif arg == "-executable":
+                    explanation.append(f"  -executable: find executable files")
+                elif arg == "-readable":
+                    explanation.append(f"  -readable: find readable files")
+                elif arg == "-writable":
+                    explanation.append(f"  -writable: find writable files")
+                else:
+                    explanation.append(f"  {arg}: {find_flags[arg]}")
+                i += 1
+            
+            # Handle special cases
+            elif arg == "{}":
+                # This is part of -exec, skip it
+                i += 1
+            elif arg == ";":
+                # End of -exec command
                 i += 1
             else:
                 explanation.append(f"  argument: {arg}")
