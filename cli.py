@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import sys
 from src.parser import tokenize_command
 from src.knowledge_base import COMMAND_KNOWLEDGE_BASE
 from src.danger_detector import detect_dangerous_patterns
@@ -7,6 +8,191 @@ from src.man_parser import get_command_help, get_command_details
 from src.custom_commands import load_custom_commands, add_custom_command
 from src.regex_explainer import looks_like_regex, explain_regex
 from src.signals import explain_signal_flag
+
+# Color codes for professional output
+class Colors:
+    """Professional color scheme for terminal output."""
+    # Primary colors
+    COMMAND = '\033[1;34m'      # Bright blue for command names
+    FLAG = '\033[0;36m'         # Cyan for flags
+    VALUE = '\033[0;32m'        # Green for values
+    DESCRIPTION = '\033[0;37m'  # White for descriptions
+    WARNING = '\033[1;33m'      # Bright yellow for warnings
+    ERROR = '\033[1;31m'        # Bright red for errors
+    SUCCESS = '\033[0;32m'      # Green for success messages
+    META = '\033[0;90m'         # Dark gray for meta information
+    
+    # Reset
+    RESET = '\033[0m'
+    BOLD = '\033[1m'
+    DIM = '\033[2m'
+
+def colorize(text, color):
+    """Apply color to text if terminal supports it."""
+    if not sys.stdout.isatty():
+        return text  # No colors if not a terminal
+    return f"{color}{text}{Colors.RESET}"
+
+# Global flag to disable colors
+NO_COLOR = False
+
+def set_no_color(disable):
+    """Set the global no-color flag."""
+    global NO_COLOR
+    NO_COLOR = disable
+
+def colorize_with_flag(text, color):
+    """Apply color to text if colors are enabled and terminal supports it."""
+    if NO_COLOR or not sys.stdout.isatty():
+        return text  # No colors if disabled or not a terminal
+    return f"{color}{text}{Colors.RESET}"
+
+def print_header(command):
+    """Print a professional command header."""
+    print(f"\n{colorize_with_flag('Command:', Colors.META)} {colorize_with_flag(command, Colors.COMMAND)}")
+    print(f"{colorize_with_flag('─' * (len(command) + 10), Colors.META)}")
+
+def print_explanation(explanation, warnings):
+    """Print explanations with professional formatting."""
+    if not explanation:
+        return
+    
+    print(f"\n{colorize_with_flag('Explanation:', Colors.META)}")
+    
+    for line in explanation:
+        if line.startswith("  "):
+            # Indented line (flag or argument)
+            if ":" in line and not line.strip().endswith(":"):
+                # Has a colon (flag: description)
+                parts = line.split(":", 1)
+                flag_part = parts[0].strip()
+                desc_part = parts[1].strip()
+                
+                # Colorize flag and description
+                colored_flag = colorize_with_flag(flag_part, Colors.FLAG)
+                colored_desc = colorize_with_flag(desc_part, Colors.DESCRIPTION)
+                print(f"  {colored_flag}: {colored_desc}")
+            else:
+                # Regular indented line
+                print(f"{colorize_with_flag(line, Colors.DESCRIPTION)}")
+        else:
+            # Main command line
+            if ":" in line and not line.strip().endswith(":"):
+                parts = line.split(":", 1)
+                cmd_part = parts[0].strip()
+                desc_part = parts[1].strip()
+                
+                colored_cmd = colorize_with_flag(cmd_part, Colors.COMMAND)
+                colored_desc = colorize_with_flag(desc_part, Colors.DESCRIPTION)
+                print(f"{colored_cmd}: {colored_desc}")
+            else:
+                print(f"{colorize_with_flag(line, Colors.COMMAND)}")
+
+def print_warnings(warnings):
+    """Print warnings with professional formatting."""
+    if warnings:
+        print(f"\n{colorize_with_flag('Warnings:', Colors.WARNING)}")
+        for warning in warnings:
+            print(f"  {colorize_with_flag('*', Colors.WARNING)} {colorize_with_flag(warning, Colors.DESCRIPTION)}")
+
+def print_pipe_operator(op):
+    """Print pipe operators with special formatting."""
+    op_symbols = {
+        '|': '|',
+        '&&': '&&',
+        '||': '||',
+        ';': ';'
+    }
+    symbol = op_symbols.get(op, op)
+    return f"{colorize_with_flag(symbol, Colors.META)}"
+
+def truncate_description(description, max_length=100):
+    """Truncate overly long descriptions to keep output readable."""
+    if len(description) <= max_length:
+        return description
+    
+    # Find a good break point (end of sentence or comma)
+    truncated = description[:max_length]
+    for break_char in ['. ', ', ', '; ']:
+        last_break = truncated.rfind(break_char)
+        if last_break > max_length * 0.7:  # Only break if we don't lose too much
+            return truncated[:last_break + 1] + "..."
+    
+    return truncated + "..."
+
+def handle_repeated_flags(flag, count):
+    """Handle repeated flags like -vv, -vvv, etc."""
+    if count == 1:
+        return flag
+    elif count == 2:
+        return f"{flag}{flag}"
+    else:
+        return f"{flag}{count}"
+
+def auto_escape_command(command_string):
+    """Automatically escape special characters in command strings for better parsing."""
+    import re
+    
+    # Don't escape if already properly quoted
+    if (command_string.startswith('"') and command_string.endswith('"')) or \
+       (command_string.startswith("'") and command_string.endswith("'")):
+        return command_string
+    
+    # Escape dollar signs that aren't already escaped
+    command_string = re.sub(r'(?<!\\)\$', r'\\$', command_string)
+    
+    # Escape unescaped double quotes
+    command_string = re.sub(r'(?<!\\)"', r'\\"', command_string)
+    
+    # Escape unescaped backticks
+    command_string = re.sub(r'(?<!\\)`', r'\\`', command_string)
+    
+    # Escape unescaped backslashes that aren't already escaping something
+    # This is tricky - we need to be careful not to double-escape
+    command_string = re.sub(r'(?<!\\)\\(?!["$`\\])', r'\\\\', command_string)
+    
+    return command_string
+
+def parse_combined_flags(arg, flags):
+    """Parse combined flags like -vv, -sC, -sV, etc."""
+    if not arg.startswith('-') or len(arg) < 2:
+        return []
+    
+    # Check for exact match first
+    if arg in flags:
+        return [(arg, flags[arg])]
+    
+    # Handle repeated single flags like -vv, -vvv
+    if len(arg) > 2 and len(set(arg[1:])) == 1:  # All characters are the same
+        char = arg[1]
+        single_flag = f"-{char}"
+        if single_flag in flags:
+            count = len(arg) - 1
+            return [(arg, f"{flags[single_flag]} (repeated {count} times)")]
+    
+    # Handle combined flags like -sC, -sV
+    if len(arg) > 2:
+        # Try to find the longest matching prefix
+        for i in range(len(arg) - 1, 1, -1):
+            prefix = arg[:i]
+            if prefix in flags:
+                remaining = arg[i:]
+                results = [(prefix, flags[prefix])]
+                # Parse remaining characters
+                for char in remaining:
+                    single_flag = f"-{char}"
+                    if single_flag in flags:
+                        results.append((single_flag, flags[single_flag]))
+                return results
+    
+    # Fall back to individual character parsing
+    results = []
+    for char in arg[1:]:
+        single_flag = f"-{char}"
+        if single_flag in flags:
+            results.append((single_flag, flags[single_flag]))
+    
+    return results
 
 def _analyze_single_command(tokens, knowledge_base):
     explanation = []
@@ -215,30 +401,29 @@ def _analyze_single_command(tokens, knowledge_base):
             if arg.startswith("--"):
                 name, eq, val = arg.partition('=')
                 if name in flags:
+                    truncated_desc = truncate_description(flags[name])
                     if eq and val:
-                        explanation.append(f"  {name}: {flags[name]} (value: {val})")
+                        explanation.append(f"  {name}: {truncated_desc} (value: {val})")
                     elif i + 1 < len(args) and not args[i+1].startswith('-'):
-                        explanation.append(f"  {name}: {flags[name]} (value: {args[i+1]})")
+                        explanation.append(f"  {name}: {truncated_desc} (value: {args[i+1]})")
                         i += 1
                     else:
-                        explanation.append(f"  {name}: {flags[name]}")
+                        explanation.append(f"  {name}: {truncated_desc}")
             elif arg.startswith("-") and len(arg) > 2:
-                # First check if the entire flag exists (for combined flags like -sC, -sV)
-                if arg in flags:
-                    explanation.append(f"  {arg}: {flags[arg]}")
-                else:
-                    # If not found as a combined flag, try individual characters
-                    for char in arg[1:]:
-                        flag = f"-{char}"
-                        if flag in flags:
-                            explanation.append(f"  {flag}: {flags[flag]}")
+                # Use the new combined flag parser
+                flag_results = parse_combined_flags(arg, flags)
+                for flag, desc in flag_results:
+                    truncated_desc = truncate_description(desc)
+                    explanation.append(f"  {flag}: {truncated_desc}")
             elif arg in flags:
                 # Short flag possibly with a following value
                 if i + 1 < len(args) and not args[i+1].startswith('-'):
-                    explanation.append(f"  {arg}: {flags[arg]} (value: {args[i+1]})")
+                    truncated_desc = truncate_description(flags[arg])
+                    explanation.append(f"  {arg}: {truncated_desc} (value: {args[i+1]})")
                     i += 1
                 else:
-                    explanation.append(f"  {arg}: {flags[arg]}")
+                    truncated_desc = truncate_description(flags[arg])
+                    explanation.append(f"  {arg}: {truncated_desc}")
             i += 1
     else:
         details = get_command_details(command)
@@ -253,23 +438,20 @@ def _analyze_single_command(tokens, knowledge_base):
             if arg.startswith("--"):
                 name, eq, val = arg.partition('=')
                 if name in flags:
+                    truncated_desc = truncate_description(flags[name])
                     if eq and val:
-                        explanation.append(f"  {name}: {flags[name]} (value: {val})")
+                        explanation.append(f"  {name}: {truncated_desc} (value: {val})")
                     elif i + 1 < len(args) and not args[i+1].startswith('-'):
-                        explanation.append(f"  {name}: {flags[name]} (value: {args[i+1]})")
+                        explanation.append(f"  {name}: {truncated_desc} (value: {args[i+1]})")
                         i += 1
                     else:
-                        explanation.append(f"  {name}: {flags[name]}")
+                        explanation.append(f"  {name}: {truncated_desc}")
             elif arg.startswith("-") and len(arg) > 2:
-                # First check if the entire flag exists (for combined flags like -sC, -sV)
-                if arg in flags:
-                    explanation.append(f"  {arg}: {flags[arg]}")
-                else:
-                    # If not found as a combined flag, try individual characters
-                    for char in arg[1:]:
-                        flag = f"-{char}"
-                        if flag in flags:
-                            explanation.append(f"  {flag}: {flags[flag]}")
+                # Use the new combined flag parser
+                flag_results = parse_combined_flags(arg, flags)
+                for flag, desc in flag_results:
+                    truncated_desc = truncate_description(desc)
+                    explanation.append(f"  {flag}: {truncated_desc}")
             elif arg in flags:
                 if i + 1 < len(args) and not args[i+1].startswith('-'):
                     explanation.append(f"  {arg}: {flags[arg]} (value: {args[i+1]})")
@@ -551,7 +733,7 @@ def analyze_command(tokens, knowledge_base):
             elif op == ';':
                 all_explanations.append(f"  {op}: Execute next command regardless of previous command's result")
             elif op == '|':
-                all_explanations.append(f"  {op}: Pipe the output of the previous command as input to the next command")
+                all_explanations.append(f"  {print_pipe_operator(op)}: Pipe the output of the previous command as input to the next command")
         else:
             exp, warns = _analyze_single_command(segment, knowledge_base)
             all_explanations.extend(exp)
@@ -562,8 +744,13 @@ def main():
     parser = argparse.ArgumentParser(description="Explains a shell command.")
     parser.add_argument("command_string", nargs='?', help="The shell command to explain.")
     parser.add_argument("--add-command", nargs=4, help="Add a new command to the custom knowledge base. Usage: --add-command <command> <description> <danger_level> <flags>", metavar=("COMMAND", "DESCRIPTION", "DANGER_LEVEL", "FLAGS"))
+    parser.add_argument("--no-color", action="store_true", help="Disable colored output")
+    parser.add_argument("--no-auto-escape", action="store_true", help="Disable automatic character escaping")
 
     args = parser.parse_args()
+
+    # Set the no-color flag
+    set_no_color(args.no_color)
 
     custom_commands = load_custom_commands()
     knowledge_base = {**COMMAND_KNOWLEDGE_BASE, **custom_commands}
@@ -579,7 +766,7 @@ def main():
                     k, v = part.split(":", 1)
                     flags[k.strip().replace("'", "")] = v.strip().replace("'", "")
         add_custom_command(command, description, danger_level, flags)
-        print(f"Command '{command}' added to the custom knowledge base.")
+        print(f"{colorize_with_flag('Success:', Colors.SUCCESS)} Command '{colorize_with_flag(command, Colors.COMMAND)}' added to the custom knowledge base.")
         return
 
     if not args.command_string:
@@ -588,21 +775,30 @@ def main():
 
     # Validate input length to prevent DoS attacks
     if len(args.command_string) > 10000:
-        print("Error: Command string too long (max 10000 characters)")
+        print(f"{colorize_with_flag('Error:', Colors.ERROR)} Command string too long (max 10000 characters)")
         return
 
-    tokens = tokenize_command(args.command_string)
+    # Auto-escape special characters for better parsing (unless disabled)
+    if args.no_auto_escape:
+        escaped_command = args.command_string
+    else:
+        escaped_command = auto_escape_command(args.command_string)
+        
+        # Show the user what we're actually parsing (if different from input)
+        if escaped_command != args.command_string:
+            print(f"{colorize_with_flag('Note:', Colors.META)} Auto-escaped command: {colorize_with_flag(escaped_command, Colors.DESCRIPTION)}")
+    
+    tokens = tokenize_command(escaped_command)
     
     explanation, analysis_warnings = analyze_command(tokens, knowledge_base)
     danger_warnings = detect_dangerous_patterns(args.command_string, tokens)
 
     all_warnings = analysis_warnings + danger_warnings
 
-    print(f"Command: {args.command_string}")
-    if explanation:
-        print(f"\nExplanation:\n" + "\n".join(explanation))
-    if all_warnings:
-        print(f"\nWarnings:\n" + "\n".join(all_warnings))
+    # Print colorized output
+    print_header(args.command_string)
+    print_explanation(explanation, all_warnings)
+    print_warnings(all_warnings)
 
 if __name__ == "__main__":
     main()
