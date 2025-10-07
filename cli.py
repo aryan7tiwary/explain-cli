@@ -203,10 +203,11 @@ def _analyze_single_command(tokens, knowledge_base):
             warnings.append(f"The command '{command}' is considered {command_info['danger_level']} risk.")
 
         flags = command_info.get("flags", {})
-        # If no flags in knowledge base, try to get them dynamically
-        if not flags:
-            details = get_command_details(command)
-            flags = details.get("flags", {})
+        # Always try to get additional flags dynamically and merge them
+        details = get_command_details(command)
+        dynamic_flags = details.get("flags", {})
+        # Merge dynamic flags with hardcoded ones (dynamic takes precedence for conflicts)
+        flags.update(dynamic_flags)
         used_flags = []
         i = 0
         while i < len(args):
