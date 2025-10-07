@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 import argparse
 import sys
+import json
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
+import threading
 from src.parser import tokenize_command
 from src.knowledge_base import COMMAND_KNOWLEDGE_BASE
 from src.danger_detector import detect_dangerous_patterns
@@ -193,6 +197,173 @@ def parse_combined_flags(arg, flags):
             results.append((single_flag, flags[single_flag]))
     
     return results
+
+class ExplainAPIHandler(BaseHTTPRequestHandler):
+    """HTTP request handler for the explain-cli API server."""
+    
+    def __init__(self, knowledge_base, *args, **kwargs):
+        self.knowledge_base = knowledge_base
+        super().__init__(*args, **kwargs)
+    
+    def do_GET(self):
+        """Handle GET requests - return API documentation."""
+        if self.path == '/':
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            
+            api_info = {
+                "name": "explain-cli API",
+                "version": "1.0.0",
+                "description": "RESTful API for shell command explanation and analysis",
+                "endpoints": {
+                    "POST /explain": {
+                        "description": "Analyze and explain shell commands with flag descriptions and security warnings",
+                        "parameters": {
+                            "command": "Shell command to explain (required, string)",
+                            "no_auto_escape": "Disable automatic character escaping (optional, boolean, default: false)",
+                            "no_color": "Disable colored output formatting (optional, boolean, default: true)"
+                        },
+                        "response": {
+                            "command": "Original command string",
+                            "escaped_command": "Auto-escaped version (if applicable)",
+                            "explanation": "Array of explanation lines",
+                            "warnings": "Array of security warnings",
+                            "success": "Boolean indicating success"
+                        }
+                    },
+                    "GET /": "API documentation and usage information"
+                },
+                "usage_examples": {
+                    "curl": "curl -X POST http://localhost:8080/explain -H 'Content-Type: application/json' -d '{\"command\": \"ls -la\"}'",
+                    "python": "import requests; response = requests.post('http://localhost:8080/explain', json={'command': 'ls -la'}); print(response.json())",
+                    "javascript": "fetch('http://localhost:8080/explain', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({command: 'ls -la'})}).then(r => r.json()).then(console.log)"
+                },
+                "error_codes": {
+                    "400": "Bad Request - Invalid JSON or missing required fields",
+                    "404": "Not Found - Invalid endpoint",
+                    "500": "Internal Server Error - Processing error"
+                }
+            }
+            
+            self.wfile.write(json.dumps(api_info, indent=2).encode())
+        else:
+            self.send_error(404, "Not Found")
+    
+    def do_POST(self):
+        """Handle POST requests - explain commands."""
+        if self.path == '/explain':
+            try:
+                # Read request body
+                content_length = int(self.headers['Content-Length'])
+                post_data = self.rfile.read(content_length)
+                
+                # Parse JSON
+                try:
+                    data = json.loads(post_data.decode('utf-8'))
+                except json.JSONDecodeError:
+                    self.send_error(400, "Invalid JSON")
+                    return
+                
+                # Validate required fields
+                if 'command' not in data:
+                    self.send_error(400, "Missing required field: command")
+                    return
+                
+                command = data['command']
+                no_auto_escape = data.get('no_auto_escape', False)
+                no_color = data.get('no_color', True)  # Default to no color for API
+                
+                # Validate input length
+                if len(command) > 10000:
+                    self.send_error(400, "Command string too long (max 10000 characters)")
+                    return
+                
+                # Process the command
+                result = process_command_explanation(command, no_auto_escape, no_color, self.knowledge_base)
+                
+                # Send response
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.send_header('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
+                self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+                self.end_headers()
+                
+                self.wfile.write(json.dumps(result, indent=2).encode())
+                
+            except Exception as e:
+                self.send_error(500, f"Internal server error: {str(e)}")
+        else:
+            self.send_error(404, "Not Found")
+    
+    def do_OPTIONS(self):
+        """Handle CORS preflight requests."""
+        self.send_response(200)
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Access-Control-Allow-Methods', 'POST, GET, OPTIONS')
+        self.send_header('Access-Control-Allow-Headers', 'Content-Type')
+        self.end_headers()
+    
+    def log_message(self, format, *args):
+        """Override to reduce log verbosity."""
+        pass
+
+def create_api_handler(knowledge_base):
+    """Create an API handler with the knowledge base."""
+    def handler(*args, **kwargs):
+        return ExplainAPIHandler(knowledge_base, *args, **kwargs)
+    return handler
+
+def process_command_explanation(command_string, no_auto_escape=False, no_color=True, knowledge_base=None):
+    """Process a command explanation and return structured data."""
+    if knowledge_base is None:
+        custom_commands = load_custom_commands()
+        knowledge_base = {**COMMAND_KNOWLEDGE_BASE, **custom_commands}
+    
+    # Auto-escape special characters for better parsing (unless disabled)
+    if no_auto_escape:
+        escaped_command = command_string
+    else:
+        escaped_command = auto_escape_command(command_string)
+    
+    tokens = tokenize_command(escaped_command)
+    
+    explanation, analysis_warnings = analyze_command(tokens, knowledge_base)
+    danger_warnings = detect_dangerous_patterns(command_string, tokens)
+    
+    all_warnings = analysis_warnings + danger_warnings
+    
+    # Structure the response
+    result = {
+        "command": command_string,
+        "escaped_command": escaped_command if escaped_command != command_string else None,
+        "explanation": explanation,
+        "warnings": all_warnings,
+        "success": True
+    }
+    
+    return result
+
+def start_api_server(host='localhost', port=8080, knowledge_base=None):
+    """Start the API server."""
+    if knowledge_base is None:
+        custom_commands = load_custom_commands()
+        knowledge_base = {**COMMAND_KNOWLEDGE_BASE, **custom_commands}
+    
+    handler_class = create_api_handler(knowledge_base)
+    server = HTTPServer((host, port), handler_class)
+    
+    print(f"explain-cli API server starting on http://{host}:{port}")
+    print(f"API documentation available at http://{host}:{port}")
+    print(f"Example usage: curl -X POST http://{host}:{port}/explain -H 'Content-Type: application/json' -d '{{\"command\": \"ls -la\"}}'")
+    print("Press Ctrl+C to stop the server")
+    
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nShutting down API server...")
+        server.shutdown()
 
 def _analyze_single_command(tokens, knowledge_base):
     explanation = []
@@ -741,11 +912,30 @@ def analyze_command(tokens, knowledge_base):
     return all_explanations, all_warnings
 
 def main():
-    parser = argparse.ArgumentParser(description="Explains a shell command.")
-    parser.add_argument("command_string", nargs='?', help="The shell command to explain.")
-    parser.add_argument("--add-command", nargs=4, help="Add a new command to the custom knowledge base. Usage: --add-command <command> <description> <danger_level> <flags>", metavar=("COMMAND", "DESCRIPTION", "DANGER_LEVEL", "FLAGS"))
-    parser.add_argument("--no-color", action="store_true", help="Disable colored output")
-    parser.add_argument("--no-auto-escape", action="store_true", help="Disable automatic character escaping")
+    parser = argparse.ArgumentParser(
+        description="Explain shell commands with detailed flag descriptions and security warnings.",
+        epilog="Examples:\n"
+               "  %(prog)s 'ls -la'\n"
+               "  %(prog)s 'find /var/log -name \"*.log\" -mtime +30'\n"
+               "  %(prog)s --api --port 8080\n"
+               "  %(prog)s --add-command mycmd 'Custom command' low '-v:verbose'",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument("command_string", nargs='?', 
+                       help="Shell command to explain")
+    parser.add_argument("--add-command", nargs=4, 
+                       help="Add custom command to knowledge base",
+                       metavar=("COMMAND", "DESCRIPTION", "DANGER_LEVEL", "FLAGS"))
+    parser.add_argument("--no-color", action="store_true", 
+                       help="Disable colored output")
+    parser.add_argument("--no-auto-escape", action="store_true", 
+                       help="Disable automatic character escaping")
+    parser.add_argument("--api", action="store_true", 
+                       help="Start HTTP API server")
+    parser.add_argument("--host", default="localhost", 
+                       help="API server host (default: localhost)")
+    parser.add_argument("--port", type=int, default=8080, 
+                       help="API server port (default: 8080)")
 
     args = parser.parse_args()
 
@@ -754,6 +944,11 @@ def main():
 
     custom_commands = load_custom_commands()
     knowledge_base = {**COMMAND_KNOWLEDGE_BASE, **custom_commands}
+
+    # Handle API mode
+    if args.api:
+        start_api_server(args.host, args.port, knowledge_base)
+        return
 
     if args.add_command:
         command, description, danger_level, flags_str = args.add_command
