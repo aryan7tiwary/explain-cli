@@ -2,6 +2,8 @@
 
 A professional command-line tool that provides detailed explanations of shell commands with intelligent flag parsing, security warnings, and API integration capabilities.
 
+![Demo](demo.png)
+
 ## Features
 
 - **Intelligent Command Analysis**: Explains Unix utilities with dynamic flag extraction from man pages
